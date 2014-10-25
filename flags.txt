@@ -1,0 +1,2 @@
+Best Flags:
+ghc -j4 -O2 -flate-dmd-anal -funfolding-use-threshold=16 -fmax-simplifier-iterations=20 -ffun-to-thunk -funbox-strict-fields -fdicts-strict -floopification -threaded -rtsopts -Wall -fforce-recomp Main.hs
