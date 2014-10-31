@@ -6,12 +6,16 @@
 module Main where
 
 import Data.Vec as Vec hiding (map, length)
+import qualified Data.Vec as Vec (map, length)
 import Data.IORef
 import Debug.Trace (trace)
+import System.Exit (exitSuccess)
 
 import qualified Codec.Picture as J
 
 import qualified Graphics.Rendering.OpenGL.GL as GL
+import qualified Graphics.UI.GLFW as GLFW
+import qualified Data.Vector.Unboxed as UV
 
 import Language.GLSL.Monad
 
@@ -21,22 +25,28 @@ import BVH
 import Shape
 import Render
 import AABB hiding (X,Y,Z)
+--import SIMD
 
-myBVH :: BVH Float (Triangle Float)
-myBVH = mkBVH triangles
+myBVH :: LinearBVH Float (Triangle Float)
+myBVH = flatten $ mkBVH triangles
 
 myOctree :: Octree Float (Triangle Float)
 myOctree = mkOctree (AABB (-1000) 1000) triangles
 
+trianglesSimple :: Float -> [Triangle Float]
+trianglesSimple y = (flip map) [(-10)..10] $ \x ->
+    Triangle (x:.y:.1:.())
+             ((x+1):.y:.1:.())
+             ((x+0.5):.(y+1):.1:.())
+
 triangles'' :: Float -> [Triangle Float]
-triangles'' y = (flip map) [(-100)..100] $ \x ->
+triangles'' y = (flip map) [(-10)..10] $ \x ->
     let sx = sin x * 50
         ty = tan y * 50
-        z = cos (x/y) * 10
+        z = trace (show ty) 10 --cos (x/y * 20) * 10
     in Triangle (sx:.ty:.z:.())
                 ((sx+1):.ty:.z:.())
                 ((sx+0.5):.(ty+1):.z:.())
-       
 
 triangles' :: Float -> [Triangle Float]
 triangles' y = (flip fmap) [(-10)..10] $ \x ->
@@ -46,7 +56,20 @@ triangles' y = (flip fmap) [(-10)..10] $ \x ->
 
 triangles :: [Triangle Float]
 triangles = --concatMap triangles'  [(-10)..10] ++
-            concatMap triangles'' [(-10)..10]
+            --concatMap triangles'' [(-20)..20]
+            concatMap trianglesSimple [(-10)..10]
+{-
+mkTriangle :: Vec3 Float -> Triangle Float
+mkTriangle (x:.y:.z:.()) =
+    Triangle (x:.y:.z:.())
+             ((x+1):.y:.z:.())
+             ((x+0.5):.(y+1):.z:.())
+
+triangles :: [Triangle Float]
+triangles = (flip concatMap) [(-10)..10] $ \x ->
+    (flip map) [(-3)..(-2)] $ \y ->
+        mkTriangle (x:.y:.1:.())
+-}
 
 vert :: ShaderM GL.VertexShader a ()
 vert = do
@@ -80,34 +103,76 @@ glProg img =
 
 myCam :: View Float
 myCam =
-    let ray = Ray (0:.0:.(-20):.()) (1:.0:.0:.())
-    in View ray (100, 100) 0.01 0.5
+    View 0 Vec.identity (100, 100) 0.01 1
 
-startGL :: BVH Float (Triangle Float) -> IO ()
+isKeyDown :: GLFW.Window -> GLFW.Key -> IO Bool
+isKeyDown win k = do
+    kp <- GLFW.getKey win k
+    return (kp == GLFW.KeyState'Repeating || kp == GLFW.KeyState'Pressed)
+
+rawToMovement :: Vec3 Float -> Vec3 Float -> Vec3 Float
+rawToMovement pos rot = undefined
+
+camMovement :: GLFW.Window -> IO (Vec3 Float)
+camMovement win = do
+    w <- isKeyDown win GLFW.Key'W
+    a <- isKeyDown win GLFW.Key'A
+    s <- isKeyDown win GLFW.Key'S
+    d <- isKeyDown win GLFW.Key'D
+    space <- isKeyDown win GLFW.Key'Space
+    shift <- isKeyDown win GLFW.Key'LeftShift
+    let d1 = if w then      (0   :.0:.1:.()) else 0
+        d2 = if d then d1 + (1   :.0:.0:.()) else d1
+        d3 = if s then d2 + (0:.0:.(-1):.()) else d2
+        d4 = if a then d3 + ((-1):.0:.0:.()) else d3
+        d5 = if space then d4 + (0:.1:.0:.()) else d4
+        d6 = if shift then d5 + (0:.(-1):.0:.()) else d5
+    return d6
+
+startGL :: LinearBVH Float (Triangle Float) -> IO ()
 startGL bvh = do
-    let img = rayTraceImg myCam bvh
+    let img = rayTraceImg' myCam bvh
     win <- openWindow
     initGL win
-    count <- newIORef (0::Float)
+    GLFW.setCursorInputMode win GLFW.CursorInputMode'Disabled
+    cpos <- newIORef 0
+    ppos <- newIORef (0,0)
+    rref <- newIORef (Ray 0 (0:.0:.1:.()))
     to <- imgToTexObj img
     prog <- glProg to
-    let galaxy = MonadicGalaxy prog (updateImage count) to
+    let galaxy = MonadicGalaxy prog (updateImage win cpos ppos rref) to
     mainLoop win $ [galaxy] -|> []
   where
-    updateImage :: IORef Float -> GL.TextureObject -> IO GL.TextureObject
-    updateImage count _ = do
-        i <- readIORef count
-        let img = rayTraceImg myCam{
-                viewRay = Ray (i:.0:.0:.()) 0} bvh
-        writeIORef count $ i+0.05
+    updateImage :: GLFW.Window ->
+        IORef (Vec3 Float) -> IORef (Double,Double) ->
+        IORef (Ray Float) ->
+        GL.TextureObject -> IO GL.TextureObject
+    updateImage win playerPos playerRot _ _ = do
+        (w, h) <- GLFW.getWindowSize win
+        (x, y) <- GLFW.getCursorPos win
+        (rx, ry) <- readIORef playerRot
+        --ray <- readIORef rref
+
+        cpos <- readIORef playerPos
+        mpos <- camMovement win
+
+        let (dx, dy) = (x - (fromIntegral $ w `div` 2),
+                        y - (fromIntegral $ h `div` 2))
+            (nx, ny) = (realToFrac $ rx + (dx * 0.004),
+                        realToFrac $ ry + (dy * 0.004))
+            newOrigin = cpos + Vec.map (*0.1) mpos
+            newMat = Vec.rotationEuler (ny:.nx:.0:.())
+            img = rayTraceImg' myCam{
+                viewMatrix = newMat,
+                viewOrigin = newOrigin} bvh
+
+        writeIORef playerPos newOrigin
+        GLFW.setCursorPos win (fromIntegral $ w `div` 2)
+                              (fromIntegral $ h `div` 2)
+        writeIORef playerRot (realToFrac nx, realToFrac ny)
+        --exitSuccess
         imgToTexObj img
 
 main :: IO ()
 main = do
-    let img = rayTraceImg myCam myBVH
-        jimg = toJuicy img
-    J.writePng "rayTrace.png" jimg
     startGL myBVH
-    --prettyImgR $ rayTraceImgP myBVH
-    --prettyImg $ rayTraceImg myBVH
-    --putStrLn . pretty $ rayTraceSceneBVH myBVH

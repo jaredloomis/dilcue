@@ -2,12 +2,19 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE FlexibleContexts #-}
 module BVH where
 
---import Control.Parallel
+import Control.Parallel
 import qualified Data.DList as D
-import Data.List (partition)
+import Data.List (partition, sortBy)
 import Data.Vec ((:.)(..), Vec3)
+import Control.Monad.ST
+import Data.STRef
+import Debug.Trace
+
+import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as MV
 
 import AABB
 import Intersect
@@ -122,6 +129,80 @@ checkOctant val (OLeaf aabb _ _) =
     aabbIntersect val aabb
 {-# INLINE checkOctant #-}
 
+-- LINEAR BVH --
+
+type LinearBVH s a = V.Vector (LinearBVHNode s a)
+type MLinearBVH st s a = MV.STVector st (LinearBVHNode s a)
+
+data LinearBVHNode s a =
+    LinearBVHNode !Axis !(AABB s) {-# UNPACK #-} !Int {-# UNPACK #-} !Int
+  | LinearBVHLeaf !Axis a
+  deriving (Show, Eq, Functor)
+
+instance (RayTrace s a, Ord s, Fractional s) => RayTrace s (LinearBVH s a) where
+    rayTrace ray@(Ray _ direction) vec = rayTrace' (vec `V.unsafeIndex` 0)
+      where
+        rayTrace' (LinearBVHLeaf _ x) = rayTrace ray x
+        rayTrace' (LinearBVHNode axis aabb left right) =
+            if isHit $ rayTrace ray aabb
+                then if isHit firstInt
+                        then firstInt
+                    else otherInt
+            else Miss
+          where
+            (childa, childb) =
+                if component axis direction > 0
+                    then (left, right) else (right, left)
+            firstInt = rayTrace' (vec `V.unsafeIndex` childa)
+            otherInt = rayTrace' (vec `V.unsafeIndex` childb)
+
+testLin :: LinearBVH Float (AABB Float)
+testLin =
+    let bvh = mkBVH [AABB 0 1, AABB 1 2, AABB 2 3]
+    in trace (show bvh ++ "\n\n") flatten bvh
+
+prettyLin :: (Show a, Show s) => LinearBVH s a -> IO ()
+prettyLin = putStrLn . concatMap (\x -> show x ++ "\n") . V.toList
+
+flatten :: BVH s a -> LinearBVH s a
+flatten bvh =
+    let bvhLen = bvhLinearLen bvh
+        createF = do
+            iref <- newSTRef 0
+            vec  <- MV.new bvhLen
+            vec'  <- flattenST iref vec bvh
+            V.unsafeFreeze vec'
+    in runST createF
+
+flattenST :: STRef st Int -> MLinearBVH st s a -> BVH s a ->
+             ST st (MLinearBVH st s a)
+flattenST iref vec (Leaf axis _ _ xs) =
+    let linear = LinearBVHLeaf axis (head xs)
+    in do
+        i <- readSTRef iref
+        MV.unsafeWrite vec i linear
+        writeSTRef iref (i+1)
+        return vec
+flattenST iref vec (Node axis aabb left right) = do
+    thisI <- readSTRef iref
+    writeSTRef iref (thisI + 1)
+
+    vec' <- flattenST iref vec left
+    leftI <- readSTRef iref
+
+    vec'' <- flattenST iref vec' right
+    rightI <- (\x->x-1) `fmap` readSTRef iref
+
+    let thisNode = LinearBVHNode axis aabb (thisI+1) leftI
+    MV.unsafeWrite vec'' thisI thisNode
+    writeSTRef iref (rightI+1)
+    return vec''
+
+bvhLinearLen :: BVH s a -> Int
+bvhLinearLen (Node _ _ l r) =
+    1 + bvhLinearLen l + bvhLinearLen r
+bvhLinearLen _ = 1
+
 -- BVH --
 
 data BVH s a =
@@ -152,7 +233,7 @@ instance (RayTrace s a, Ord s, Fractional s) => RayTrace s (BVH s a) where
             if component axis direction > 0
                 then (left, right) else (right, left)
         firstInt = rayTrace ray childa
-        otherInt = firstInt `seq` rayTrace ray childb
+        otherInt = rayTrace ray childb
 
 bvhToList :: BVH s a -> [a]
 bvhToList = D.toList . bvhToListD
@@ -162,7 +243,6 @@ bvhToList = D.toList . bvhToListD
         bvhToListD l `D.append` bvhToListD r
     bvhToListD (Leaf _ _ _ xs) = D.fromList xs
 
-
 mkBVH :: (HasAABB s a, Ord s, Fractional s) => [a] -> BVH s a
 mkBVH [x] = Leaf X (boundingBox x) 1 [x]
 mkBVH []  = Leaf X emptyAABB 0 []
@@ -171,6 +251,7 @@ mkBVH xs  =
   where
     ((left, right), allBounds) = splitMidpoint xs dim
     dim = maximumExtent . centroidBounds $ xs
+{-# SPECIALIZE mkBVH :: HasAABB Float a => [a] -> BVH Float a #-}
 
 intersectBVH :: (RayTrace s a, Ord s, Fractional s) =>
                  Ray s -> BVH s a -> Bool
@@ -189,6 +270,9 @@ intersectBVH ray@(Ray _ direction) (Node axis aabb left right) =
             then (left,right) else (right,left)
     firstInt = intersectBVH ray childa
     otherInt = intersectBVH ray childb
+{-# SPECIALIZE
+ intersectBVH :: RayTrace Float a => Ray Float -> BVH Float a -> Bool
+ #-}
 
 nearby :: (Ord s, Fractional s) => Ray s -> BVH s a -> [a]
 nearby ray = D.toList . nearbyD ray
@@ -223,3 +307,6 @@ splitMidpoint xs axis =
     isLeft x = component axis (aabbCentroid $ boundingBox x) < midpoint
     midpoint = component axis $ aabbCentroid allBounds
     allBounds = foldr expandAABBToFit emptyAABB xs
+{-# SPECIALIZE
+ splitMidpoint :: HasAABB Float a => [a] -> Axis -> (([a],[a]), AABB Float)
+ #-}
