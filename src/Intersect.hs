@@ -11,18 +11,28 @@ data Color = Color
     {-# UNPACK #-} !Word8 {-# UNPACK #-} !Word8
     deriving (Show, Eq)
 
-data Rayint s =
+data Rayint =
     Miss
   | Hit {
-    riDepth :: s,
-    riPos   :: Vec3 s,
-    riNorm  :: Vec3 s,
-    riColor :: !Color
+    riDepth :: {-# UNPACK #-} !Float,
+    riPos   :: {-# UNPACK #-} !(Vec3 Float),
+    riNorm  :: {-# UNPACK #-} !(Vec3 Float),
+    riColor :: {-# UNPACK #-} !Color
     }
   | Change {
-    riNewRay :: !(Ray s)
+    riNewRay :: {-# UNPACK #-} !Ray
     } deriving (Show, Eq)
 
-isHit :: Rayint s -> Bool
+nearest :: Rayint -> Rayint -> Rayint
+nearest Miss b = b
+nearest a Miss = a
+nearest (Change{}) b = b
+nearest a (Change{}) = a
+nearest a@(Hit da _ _ _) b@(Hit db _ _ _) =
+    if da < db
+        then a
+    else b
+
+isHit :: Rayint -> Bool
 isHit Miss = False
 isHit _    = True

@@ -10,19 +10,19 @@ import RayTrace
 import Accel
 import Coherence
 
-data Solid s = forall a. (RayTrace s a, HasAABB s a) => Solid a
+data Solid = forall a. (RayTrace a, HasAABB a) => Solid !a
 
-instance RayTrace s (Solid s) where
+instance RayTrace Solid where
     rayTrace ray (Solid s) = rayTrace ray s
-instance HasAABB s (Solid s) where
+instance HasAABB Solid where
     boundingBox (Solid s) = boundingBox s
 
-data DilcueScene s =
+data DilcueScene =
     DilcueScene
-        (LinearBVH s (Solid s))
-        (LinearBVH s (Warp s))
+        (LinearBVH Solid)
+        (LinearBVH Warp)
 
-instance (Fractional s, Ord s) => RayTrace s (DilcueScene s) where
+instance RayTrace DilcueScene where
     rayTrace ray (DilcueScene solids warps) =
         case rayTrace ray warps of
             Change ray' -> rayTrace ray' solids

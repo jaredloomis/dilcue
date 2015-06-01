@@ -1,5 +1,4 @@
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PolyKinds #-}
@@ -12,28 +11,32 @@ import Data.IORef
 import Debug.Trace (trace)
 import System.Exit (exitSuccess)
 import Data.Time.Clock
+import Data.Proxy
 
 import qualified Graphics.Rendering.OpenGL.GL as GL
 import qualified Graphics.UI.GLFW as GLFW
 
-import Language.GLSL.Monad
+import Andromeda.Monad
 
 import Ray
 import Scene
-import Intersect
 import Accel
 import Shape
+import RayTrace
 import Render
+import MorphMat
 import AABB hiding (X,Y,Z)
---import SIMD
 
-myBVH :: BVH Float (Solid Float)
+myBVH :: BVH Solid
 myBVH = mkBVH triangles
 
-warpBVH :: BVH Float (Warp Float)
-warpBVH = mkBVH [Warp (AABB 0 10) warpSpace]
+myBIH :: BIH Solid
+myBIH = mkBIH triangles
 
-warpSpace :: Ray Float -> Ray Float
+warpBVH :: BVH Warp
+warpBVH = mkBVH [Warp (AABB 0 10) myWarpF]
+
+warpSpace :: Ray -> Ray
 warpSpace ray@(Ray origin@(ox:.oy:.oz:.()) dir)
     | pointInAABB origin (AABB 0 10) =
         let m = 1 + ox
@@ -42,7 +45,7 @@ warpSpace ray@(Ray origin@(ox:.oy:.oz:.()) dir)
         in Ray origin $ multmv3 mats dir
     | otherwise = ray
 
-myWarpF :: Ray Float -> Ray Float
+myWarpF :: Ray -> Ray
 myWarpF (Ray origin dir) =
     let delta = 3 * sin (Vec.get Vec.n0 dir) * cos (Vec.get Vec.n2 origin)
         rotMat = Vec.rotationX delta `Vec.multmm` Vec.rotationY (cos delta)
@@ -51,21 +54,23 @@ myWarpF (Ray origin dir) =
         dir' = Vec.take Vec.n3 dir4'
     in Ray origin dir'
 
-scene :: DilcueScene Float
+scene :: DilcueScene
 scene = DilcueScene (flatten myBVH) (flatten warpBVH)
 
 --myOctree :: Octree Float (Solid Float)
 --myOctree = mkOctree (AABB (-1000) 1000) triangles
 
-trianglesSimple :: Float -> [Solid Float]
-trianglesSimple y = (flip map) [(-10)..10] $ \x ->
-    Solid $
+trianglesSimple :: Float -> [Triangle]
+trianglesSimple y = flip map [(-10)..10] $ \x ->
     Triangle (x:.y:.1:.())
              ((x+1):.y:.1:.())
              ((x+0.5):.(y+1):.1:.())
 
-triangles'' :: Float -> [Solid Float]
-triangles'' y = (flip map) [(-10)..10] $ \x ->
+trianglesRaw :: [Triangle]
+trianglesRaw = concatMap trianglesSimple [(-10)..10]
+
+triangles'' :: Float -> [Solid]
+triangles'' y = flip map [(-10)..10] $ \x ->
     let sx = sin x * 50
         ty = tan y * 50
         z  = cos (x/y * 20) * 10
@@ -73,24 +78,17 @@ triangles'' y = (flip map) [(-10)..10] $ \x ->
                 ((sx+1):.ty:.z:.())
                 ((sx+0.5):.(ty+1):.z:.())
 
-triangles' :: Float -> [Solid Float]
-triangles' y = (flip fmap) [(-10)..10] $ \x ->
-                Solid $
-                Triangle (x    :.y:.1:.())
-                         ((x+1):.y:.1:.())
-                         ((x+0.5):.(y+1):.1:.())
-
-triangles :: [Solid Float]
-triangles = --concatMap triangles'  [(-10)..10] ++
-            --concatMap triangles'' [(-20)..20]
-            concatMap trianglesSimple [(-10)..10]
+triangles :: [Solid]
+triangles =
+            --concatMap triangles'' [(-10)..10]
+            concatMap (map Solid . trianglesSimple) [(-10)..10]
 
 vert :: ShaderM GL.VertexShader a ()
 vert = do
     version "430 core"
 
     position <- layoutIn ["location=0"] vec3 ("position",
-                (const screenBufferData))
+                    const screenBufferData)
 
     _ <- out vec2 "tcoord" $=
         (fltd 0 +.+ fltd 1) .-
@@ -115,9 +113,9 @@ glProg img =
     let shSeq = Shader Proxy vert -&> lastly (Shader Proxy frag)
     in createProgram shSeq img
 
-myCam :: View Float
+myCam :: View
 myCam =
-    View 0 Vec.identity (300, 300) 0.01 1
+    View 0 id (500, 500) 0.01 1
 
 isKeyDown :: GLFW.Window -> GLFW.Key -> IO Bool
 isKeyDown win k = do
@@ -135,7 +133,7 @@ camMovement win = do
     d <- isKeyDown win GLFW.Key'D
     space <- isKeyDown win GLFW.Key'Space
     shift <- isKeyDown win GLFW.Key'LeftShift
-    let d1 = if w then      (0   :.0:.1:.()) else 0
+    let d1 = if w then       0   :.0:.1:.() else 0
         d2 = if d then d1 + ((-1):.0:.0:.()) else d1
         d3 = if s then d2 + (0:.0:.(-1):.()) else d2
         d4 = if a then d3 + (1:.0:.0:.()) else d3
@@ -146,7 +144,7 @@ camMovement win = do
 getTime :: IO Float
 getTime = (realToFrac . utctDayTime) `fmap` getCurrentTime
 
---startGL :: RayTrace Float a => a -> IO ()
+startGL :: RayTrace a => a -> IO ()
 startGL bvh = do
     let img = rayTraceImgCoh myCam bvh
     win <- openWindow
@@ -177,12 +175,12 @@ startGL bvh = do
         cpos <- readIORef playerPos
         mpos <- camMovement win
 
-        let (dx, dy) = (x - (fromIntegral $ w `div` 2),
-                        y - (fromIntegral $ h `div` 2))
+        let (dx, dy) = (x - fromIntegral (w `div` 2),
+                        y - fromIntegral (h `div` 2))
             (nx, ny) = (realToFrac $ rx + (dx * 0.004),
                         realToFrac $ ry + (dy * 0.004))
             newOrigin = cpos + Vec.map (*0.1) mpos
-            newMat = Vec.rotationEuler ((-ny):.(-nx):.0:.())
+            newMat = rotationEuler ((-ny):.(-nx):.0:.())
             img = rayTraceImgCoh myCam{
                 viewMatrix = newMat,
                 viewOrigin = newOrigin} bvh
@@ -207,6 +205,8 @@ startGL bvh = do
         imgToTexObj img
 
 main :: IO ()
-main = do
+main =
 --    startGL scene
-    startGL $ flatten myBVH
+--    startGL $ myBVH
+--    startGL $ flatten myBVH
+    startGL myBIH

@@ -3,9 +3,12 @@ module Coherence where
 import Ray
 import Intersect
 
-data RayPacket s = RayPacket !(Ray s) !(Ray s) !(Ray s) !(Ray s)
+data RayPacket = RayPacket
+    {-# UNPACK #-} !Ray
+    {-# UNPACK #-} !Ray
+    {-# UNPACK #-} !Ray
+    {-# UNPACK #-} !Ray
   deriving (Show, Eq)
 
-data PacketResult s =
-    PacketResult !(Rayint s) !(Rayint s) !(Rayint s) !(Rayint s)
+data PacketResult = PacketResult !Rayint !Rayint !Rayint !Rayint
   deriving (Show, Eq)

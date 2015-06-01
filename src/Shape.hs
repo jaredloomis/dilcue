@@ -12,10 +12,13 @@ import Ray
 -- Triangle --
 --------------
 
-data Triangle s = Triangle !(Vec3 s) !(Vec3 s) !(Vec3 s)
+data Triangle = Triangle
+    {-# UNPACK #-} !(Vec3 Float)
+    {-# UNPACK #-} !(Vec3 Float)
+    {-# UNPACK #-} !(Vec3 Float)
   deriving (Show, Eq)
 
-instance Ord s => HasAABB s (Triangle s) where
+instance HasAABB Triangle where
     boundingBox (Triangle a b c) =
         let testComponent f p =
                 f (f (component p a) (component p b)) (component p c)
@@ -27,7 +30,7 @@ instance Ord s => HasAABB s (Triangle s) where
             high = testAllComps max
         in AABB low high
 
-surfaceNormal :: Floating a => Triangle a -> Vec3 a
+surfaceNormal :: Triangle -> Vec3 Float
 surfaceNormal (Triangle p1 p2 p3) =
     let e1 = p2 - p1
         e2 = p3 - p1
@@ -37,7 +40,7 @@ surfaceNormal (Triangle p1 p2 p3) =
 -- Non-Euclidian Geometry --
 ----------------------------
 
-data Warp s = Warp (AABB s) (Ray s -> Ray s)
+data Warp = Warp !AABB (Ray -> Ray)
 
-instance HasAABB s (Warp s) where
+instance HasAABB Warp where
     boundingBox (Warp aabb _) = aabb
