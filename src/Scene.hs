@@ -12,6 +12,9 @@ import Coherence
 
 data Solid = forall a. (RayTrace a, HasAABB a) => Solid !a
 
+instance Show Solid where
+    show _ = "Solid"
+
 instance RayTrace Solid where
     rayTrace ray (Solid s) = rayTrace ray s
 instance HasAABB Solid where

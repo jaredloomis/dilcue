@@ -27,7 +27,7 @@ import Coherence
 -- BIH (Faster than both BVH and LinearBVH) --
 ----------------------------------------------
 
-data BIH a = BIH (BIHNode a) {-# UNPACK #-} !AABB
+data BIH a = BIH !(BIHNode a) {-# UNPACK #-} !AABB
   deriving (Show, Eq)
 
 data BIHNode a =
@@ -38,16 +38,33 @@ data BIHNode a =
             (BIHNode a) (BIHNode a)
   deriving (Show, Eq)
 
+showBIHStructure :: BIH a -> String
+showBIHStructure (BIH n _) = showBIHNodeStructure 0 n
+
+showBIHNodeStructure :: Int -> BIHNode a -> String
+showBIHNodeStructure i (BIHLeaf xs) =
+    replicate (i*2) ' ' ++
+    "[" ++ show (length xs) ++ "elements]"
+showBIHNodeStructure i (BIHNode axis _ _ l r) =
+    replicate (i*2) ' ' ++ show axis ++ " " ++
+    "l{\n" ++ showBIHNodeStructure (i+1) l ++
+    replicate (i*2) ' ' ++
+    "}l\n" ++
+    replicate (i*2) ' ' ++
+    "r{\n" ++ showBIHNodeStructure (i+1) r ++
+    replicate (i*2) ' ' ++
+    "}r\n"
+
 mkBIH :: HasAABB a => [a] -> BIH a
 mkBIH xs = BIH (mkBIH' 0 xs) (createBoundingAll xs)
 
 mkBIH' :: HasAABB a => Int -> [a] -> BIHNode a
 mkBIH' depth xs
     | length xs <= 3 = BIHLeaf xs
-    |otherwise =
-    let (# (# lx,rx #), bb@(AABB bblow bbhigh) #) = splitMidpoint xs X
-        (# (# ly,ry #), _ #) = splitMidpoint xs Y
-        (# (# lz,rz #), _ #) = splitMidpoint xs Z
+    | otherwise =
+    let (# (# lx, rx #), bb@(AABB bblow bbhigh) #) = splitMidpoint xs X
+        (# (# ly, ry #), _ #) = splitMidpoint xs Y
+        (# (# lz, rz #), _ #) = splitMidpoint xs Z
 
         lxmax = maxComp X lx
         rxmin = minComp X rx
@@ -82,9 +99,9 @@ mkBIH' depth xs
                 (aabbSurfaceArea rzbb * rzcount)
         costorig = aabbSurfaceArea bb * objcount
 
-    in if isMin costorig [costx,costy,costz]
+    in if isMin costorig [costx, costy, costz]
             then BIHLeaf xs
-        else if isMin costx [costy,costz]
+        else if isMin costx [costy, costz]
             then buildBranch lxmax rxmin X lx rx
         else if costy < costz
             then buildBranch lymax rymin Y ly ry
@@ -137,18 +154,18 @@ rayTraceBIH ray@(Ray (ox:.oy:.oz:.()) dir)
                 then Miss
             else if dirr > 0
                 then
-                let lInt = if near < dl
+                let lInt = if near <= dl
                         then traverse near (min dl far) l
                         else Miss
-                    rInt = if dr < far
+                    rInt = if dr <= far
                         then traverse (max dr near) far r
                         else Miss
                 in nearest lInt rInt
             else
-                let lInt = if near < dr
+                let lInt = if near <= dr
                         then traverse near (min dr far) r
                         else Miss
-                    rInt = if dl < far
+                    rInt = if dl <= far
                         then traverse (max dl near) far l
                         else Miss
                 in nearest lInt rInt
@@ -187,18 +204,18 @@ rayTracePacketBIH
                 then D.empty
             else if dirr > 0
                 then
-                let lInt = if near < dl
+                let lInt = if near <= dl
                         then getNearby near (min dl far) l
                         else D.empty
-                    rInt = if dr < far
+                    rInt = if dr <= far
                         then getNearby (max dr near) far r
                         else D.empty
                 in lInt `D.append` rInt
             else
-                let lInt = if near < dr
+                let lInt = if near <= dr
                         then getNearby near (min dr far) r
                         else D.empty
-                    rInt = if dl < far
+                    rInt = if dl <= far
                         then getNearby (max dl near) far l
                         else D.empty
                 in lInt `D.append` rInt

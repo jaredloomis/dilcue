@@ -1,7 +1,5 @@
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DataKinds, PolyKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 module Main where
 
@@ -28,10 +26,10 @@ import MorphMat
 import AABB hiding (X,Y,Z)
 
 myBVH :: BVH Solid
-myBVH = mkBVH triangles
+myBVH = mkBVH $ map Solid triangles
 
 myBIH :: BIH Solid
-myBIH = mkBIH triangles
+myBIH = mkBIH $ map Solid triangles
 
 warpBVH :: BVH Warp
 warpBVH = mkBVH [Warp (AABB 0 10) myWarpF]
@@ -57,31 +55,18 @@ myWarpF (Ray origin dir) =
 scene :: DilcueScene
 scene = DilcueScene (flatten myBVH) (flatten warpBVH)
 
---myOctree :: Octree Float (Solid Float)
---myOctree = mkOctree (AABB (-1000) 1000) triangles
+mkTriangle :: Float -> Float -> Float -> Triangle
+mkTriangle x y z =
+    Triangle (x      :.y    :.z:.())
+             ((x+1)  :.y    :.z:.())
+             ((x+0.5):.(y+1):.z:.())
 
-trianglesSimple :: Float -> [Triangle]
-trianglesSimple y = flip map [(-10)..10] $ \x ->
-    Triangle (x:.y:.1:.())
-             ((x+1):.y:.1:.())
-             ((x+0.5):.(y+1):.1:.())
-
-trianglesRaw :: [Triangle]
-trianglesRaw = concatMap trianglesSimple [(-10)..10]
-
-triangles'' :: Float -> [Solid]
-triangles'' y = flip map [(-10)..10] $ \x ->
-    let sx = sin x * 50
-        ty = tan y * 50
-        z  = cos (x/y * 20) * 10
-    in Solid $ Triangle (sx:.ty:.z:.())
-                ((sx+1):.ty:.z:.())
-                ((sx+0.5):.(ty+1):.z:.())
-
-triangles :: [Solid]
+triangles :: [Triangle]
 triangles =
-            --concatMap triangles'' [(-10)..10]
-            concatMap (map Solid . trianglesSimple) [(-10)..10]
+    mkTriangle
+        <$> [(-5)..5]
+        <*> [(-5)..5]
+        <*> [(-5)..5]
 
 vert :: ShaderM GL.VertexShader a ()
 vert = do
@@ -114,8 +99,8 @@ glProg img =
     in createProgram shSeq img
 
 myCam :: View
-myCam =
-    View 0 id (500, 500) 0.01 1
+myCam = View 0 id (588, 588) 0.004 1
+--    View 0 id (500, 500) 0.004 1
 
 isKeyDown :: GLFW.Window -> GLFW.Key -> IO Bool
 isKeyDown win k = do
@@ -205,7 +190,10 @@ startGL bvh = do
         imgToTexObj img
 
 main :: IO ()
-main =
+main = do
+--    putStrLn . showBIHStructure $ myBIH
+    print $ mkBIH triangles
+
 --    startGL scene
 --    startGL $ myBVH
 --    startGL $ flatten myBVH
